@@ -149,4 +149,13 @@ npm version patch   # or minor / major
 git push origin main --tags
 ```
 
-GitHub Actions will run typecheck → build → publish automatically on `v*` tag push.
+GitHub Actions runs: **typecheck** → **test** → **build** → **publish to npm + GitHub Packages** (in parallel).
+
+### Required secrets
+
+| Secret | Registry | How to get |
+|---|---|---|
+| `GITHUB_TOKEN` | GitHub Packages | Auto-provided by GitHub Actions |
+| `NPM_TOKEN` | npm | npmjs.com → Access Tokens → Classic Token (Automation) |
+
+Add `NPM_TOKEN` in repo Settings → Secrets and variables → Actions.
