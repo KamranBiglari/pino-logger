@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/KamranBiglari/pino-logger/compare/v1.1.0...v1.2.0) (2026-03-26)
+
+### Features
+
+* add exclude option to omit base fields from log output ([97bdd76](https://github.com/KamranBiglari/pino-logger/commit/97bdd76ad1acd9d918343409cf887fd98e969f4d))
+
 ## [1.1.0](https://github.com/KamranBiglari/pino-logger/compare/v1.0.1...v1.1.0) (2026-03-26)
 
 ### Features
