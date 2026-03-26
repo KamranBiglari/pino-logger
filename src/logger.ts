@@ -1,12 +1,39 @@
-import pino, { Logger, LoggerOptions } from 'pino';
-import { BaseLogFields, LOG_LEVELS, LogLevel } from './types.js';
+import pino, { LoggerOptions, LogFn } from 'pino';
+import { CreateLoggerOptions, LOG_LEVELS, LogLevel, MetricFields, Timer } from './types.js';
 import { resolveLogLevel } from './resolve-level.js';
+import { getContext } from './context.js';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+// Pino logger with custom 'alert' level added
+type PinoInstance = pino.Logger<'alert'>;
+
+// A function that can log — covers all Pino level methods including custom ones
+type PinoLogFn = LogFn;
+
+// ─── Pre-allocated constants ──────────────────────────────────────────────────
 
 // Pre-allocate level label objects to avoid creating a new object on every log call.
 // This eliminates per-call GC pressure from the formatters.level function.
 const LEVEL_OBJECTS: Record<string, { level: string }> = Object.fromEntries(
   LOG_LEVELS.map((l) => [l, { level: l }]),
 );
+
+// Pre-allocate level prefix strings: "[INFO] ", "[ERROR] ", etc.
+const LEVEL_PREFIXES: Record<string, string> = Object.fromEntries(
+  LOG_LEVELS.map((l) => [l, `[${l.toUpperCase()}] `]),
+);
+
+// Pino's built-in numeric levels max at fatal=60. Alert is above fatal.
+const ALERT_LEVEL_NUM = 70;
+const ALERT_LEVEL_NAME = 'alert';
+
+// ─── Sample state ─────────────────────────────────────────────────────────────
+
+interface SampleState {
+  since_last_emit: number;
+  total: number;
+}
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
@@ -29,186 +56,276 @@ function buildTransport(): LoggerOptions['transport'] {
 /**
  * Opinionated Pino wrapper with:
  * - LOG_LEVEL / LOG_VERBOSE env var control
+ * - Level prefix in messages: "[INFO] msg" for log parser alerting
  * - Full Error serialisation (message, stack, code) via `err` field
+ * - alert() — highest severity level (above fatal), does NOT kill process
  * - fatal() kills the process with exit code 1
  * - child() returns PinoLogger (not raw Pino instance)
+ * - AsyncLocalStorage context propagation (withContext)
+ * - Request duration tracking (startTimer)
+ * - Structured metric logging (metric)
+ * - Log sampling with counting (no data loss)
+ * - Graceful async shutdown
  * - pino-pretty in development (NODE_ENV=development)
  * - Sensitive field redaction
  */
 export class PinoLogger {
-  private readonly _pino: Logger;
+  private readonly _pino: PinoInstance;
+  private readonly _sample: Partial<Record<LogLevel, number>> | undefined;
+  // Shared across parent + child loggers so sampling counters are global
+  private readonly _sampleState: Map<string, SampleState>;
 
-  constructor(pinoInstance: Logger) {
+  constructor(
+    pinoInstance: PinoInstance,
+    sample?: Partial<Record<LogLevel, number>>,
+    sampleState?: Map<string, SampleState>,
+  ) {
     this._pino = pinoInstance;
+    this._sample = sample;
+    this._sampleState = sampleState ?? new Map();
+  }
+
+  // ── core log dispatch ────────────────────────────────────────────────────
+
+  /**
+   * Internal log dispatch. Handles sampling, async context merge,
+   * and level prefix injection. Optimised for the common fast path
+   * (no context, no sampling) to avoid object allocation.
+   */
+  private _log(level: LogLevel, objOrMsg: Record<string, unknown> | string, msg?: string): void {
+    // ── Sampling gate ──
+    const rate = this._sample?.[level];
+    let sampleFields: { sampled_count: number; sampled_total: number } | null = null;
+    if (rate && rate > 1) {
+      let state = this._sampleState.get(level);
+      if (!state) {
+        state = { since_last_emit: 0, total: 0 };
+        this._sampleState.set(level, state);
+      }
+      state.total++;
+      state.since_last_emit++;
+      if (state.since_last_emit < rate) return; // skip but counted
+      sampleFields = { sampled_count: state.since_last_emit, sampled_total: state.total };
+      state.since_last_emit = 0;
+    }
+
+    // ── Async context ──
+    const ctx = getContext();
+    const hasExtra = ctx !== undefined || sampleFields !== null;
+
+    // ── Resolve the Pino log function for this level ──
+    const logFn: PinoLogFn = (this._pino[level] as PinoLogFn).bind(this._pino);
+
+    // ── Emit with level prefix in message ──
+    const prefix = LEVEL_PREFIXES[level] ?? `[${level.toUpperCase()}] `;
+
+    if (typeof objOrMsg === 'string') {
+      const message = prefix + objOrMsg;
+      if (hasExtra) {
+        const merged = sampleFields
+          ? ctx ? { ...ctx, ...sampleFields } : sampleFields
+          : ctx!;
+        logFn(merged, message);
+      } else {
+        logFn(message);
+      }
+    } else {
+      const message = prefix + msg!;
+      if (hasExtra) {
+        const merged = { ...ctx, ...sampleFields, ...objOrMsg };
+        logFn(merged, message);
+      } else {
+        logFn(objOrMsg, message);
+      }
+    }
   }
 
   // ── trace ────────────────────────────────────────────────────────────────
 
-  /**
-   * Logs at TRACE level. Most verbose — for internal state and hot-path detail.
-   * Only emitted when LOG_LEVEL=trace or LOG_VERBOSE=true.
-   *
-   * @example
-   * logger.trace({ tick: i }, 'loop iteration');
-   */
   trace(obj: Record<string, unknown>, msg: string): void;
   trace(msg: string): void;
   trace(objOrMsg: Record<string, unknown> | string, msg?: string): void {
-    if (typeof objOrMsg === 'string') {
-      this._pino.trace(objOrMsg);
-    } else {
-      this._pino.trace(objOrMsg, msg!);
-    }
+    this._log('trace', objOrMsg, msg);
   }
 
   // ── debug ────────────────────────────────────────────────────────────────
 
-  /**
-   * Logs at DEBUG level. For development-time detail: queries, payloads, decisions.
-   * Only emitted when LOG_LEVEL=debug or lower.
-   *
-   * @example
-   * logger.debug({ query, params }, 'db query built');
-   */
   debug(obj: Record<string, unknown>, msg: string): void;
   debug(msg: string): void;
   debug(objOrMsg: Record<string, unknown> | string, msg?: string): void {
-    if (typeof objOrMsg === 'string') {
-      this._pino.debug(objOrMsg);
-    } else {
-      this._pino.debug(objOrMsg, msg!);
-    }
+    this._log('debug', objOrMsg, msg);
   }
 
   // ── info ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Logs at INFO level. For normal operations: startup, user actions, milestones.
-   * Default level — always emitted in production unless LOG_LEVEL is set higher.
-   *
-   * @example
-   * logger.info({ userId }, 'user logged in');
-   */
   info(obj: Record<string, unknown>, msg: string): void;
   info(msg: string): void;
   info(objOrMsg: Record<string, unknown> | string, msg?: string): void {
-    if (typeof objOrMsg === 'string') {
-      this._pino.info(objOrMsg);
-    } else {
-      this._pino.info(objOrMsg, msg!);
-    }
+    this._log('info', objOrMsg, msg);
   }
 
   // ── warn ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Logs at WARN level. For degraded-but-recoverable states: retries, slow upstreams.
-   *
-   * @example
-   * logger.warn({ retries: 3, latency_ms: 2000 }, 'upstream slow, retrying');
-   */
   warn(obj: Record<string, unknown>, msg: string): void;
   warn(msg: string): void;
   warn(objOrMsg: Record<string, unknown> | string, msg?: string): void {
-    if (typeof objOrMsg === 'string') {
-      this._pino.warn(objOrMsg);
-    } else {
-      this._pino.warn(objOrMsg, msg!);
-    }
+    this._log('warn', objOrMsg, msg);
   }
 
   // ── error ────────────────────────────────────────────────────────────────
 
-  /**
-   * Logs at ERROR level with full Error serialisation.
-   * Always pass the raw Error object as the `err` field.
-   * Pino serialises err.message, err.stack, and err.code automatically.
-   *
-   * @example
-   * try {
-   *   await fetchRates();
-   * } catch (err) {
-   *   logger.error({ err, endpoint: '/v1/rates' }, 'rate fetch failed');
-   * }
-   */
   error(obj: Record<string, unknown>, msg: string): void;
   error(msg: string): void;
   error(objOrMsg: Record<string, unknown> | string, msg?: string): void {
-    if (typeof objOrMsg === 'string') {
-      this._pino.error(objOrMsg);
-    } else {
-      this._pino.error(objOrMsg, msg!);
-    }
+    this._log('error', objOrMsg, msg);
   }
 
   // ── fatal ────────────────────────────────────────────────────────────────
 
   /**
    * Logs at FATAL level then kills the process with exit code 1.
-   *
-   * Use for unrecoverable failures where the app cannot safely continue:
-   * - Database connection failure at startup
-   * - Missing required environment variables
-   * - Corrupt critical state
-   *
-   * The log is flushed to stdout before exiting.
-   *
-   * @example
-   * try {
-   *   await db.connect();
-   * } catch (err) {
-   *   logger.fatal({ err }, 'database connection failed — cannot start');
-   *   // process exits here, nothing below runs
-   * }
+   * Flushes sample counters and log buffer before exiting.
    */
   fatal(obj: Record<string, unknown>, msg: string): never;
   fatal(msg: string): never;
   fatal(objOrMsg: Record<string, unknown> | string, msg?: string): never {
-    if (typeof objOrMsg === 'string') {
-      this._pino.fatal(objOrMsg);
-    } else {
-      this._pino.fatal(objOrMsg, msg!);
-    }
-
-    // Flush buffer before exit — critical when using async transports
-    try {
-      this._pino.flush?.();
-    } catch {
-      // ignore flush errors — we're exiting anyway
-    }
-
+    this._log('fatal', objOrMsg, msg);
+    this.flushSampleCounts();
+    try { this._pino.flush?.(); } catch { /* exiting anyway */ }
     process.exit(1);
+  }
+
+  // ── alert ────────────────────────────────────────────────────────────────
+
+  /**
+   * Logs at ALERT level — highest severity, above fatal.
+   * Use for conditions requiring immediate operator attention:
+   * - Security breaches detected
+   * - Data corruption detected
+   * - Critical SLA violations
+   *
+   * Unlike fatal(), alert() does NOT kill the process.
+   * The service continues running so it can handle other requests.
+   *
+   * @example
+   * logger.alert({ breach_type: 'unauthorized_access', ip }, 'security breach detected');
+   */
+  alert(obj: Record<string, unknown>, msg: string): void;
+  alert(msg: string): void;
+  alert(objOrMsg: Record<string, unknown> | string, msg?: string): void {
+    this._log('alert', objOrMsg, msg);
   }
 
   // ── child ────────────────────────────────────────────────────────────────
 
   /**
    * Creates a child logger with additional bound fields.
-   * Every log from the child automatically includes these fields.
-   * Returns a PinoLogger, not a raw Pino instance.
-   *
-   * Use at the start of a request to bind req_id and user_id once.
-   *
-   * @example
-   * const reqLogger = logger.child({ req_id: req.id, user_id: req.userId });
-   * reqLogger.info({ path: req.path }, 'request received');
-   * reqLogger.error({ err }, 'handler failed'); // includes req_id and user_id
+   * Shares sample counters with the parent for consistent global sampling.
    */
   child(bindings: Record<string, unknown>): PinoLogger {
-    return new PinoLogger(this._pino.child(bindings));
+    return new PinoLogger(this._pino.child(bindings), this._sample, this._sampleState);
+  }
+
+  // ── startTimer ───────────────────────────────────────────────────────────
+
+  /**
+   * Starts a high-resolution timer. Returns a Timer object with:
+   * - elapsed(): returns ms elapsed so far
+   * - done(msg) / done(obj, msg): logs at info level with duration_ms
+   *
+   * @example
+   * const timer = logger.startTimer();
+   * await processRequest();
+   * timer.done({ req_id }, 'request processed'); // includes duration_ms
+   */
+  startTimer(): Timer {
+    const start = process.hrtime.bigint();
+    const self = this;
+    return {
+      elapsed(): number {
+        return Number(process.hrtime.bigint() - start) / 1_000_000;
+      },
+      done(objOrMsg: Record<string, unknown> | string, msg?: string): void {
+        const duration_ms = Math.round(Number(process.hrtime.bigint() - start) * 100 / 1_000_000) / 100;
+        if (typeof objOrMsg === 'string') {
+          self._log('info', { duration_ms }, objOrMsg);
+        } else {
+          self._log('info', { ...objOrMsg, duration_ms }, msg!);
+        }
+      },
+    } as Timer;
+  }
+
+  // ── metric ───────────────────────────────────────────────────────────────
+
+  /**
+   * Emits a structured metric log at info level.
+   * All metric logs include `metric_type: "metric"` for easy filtering
+   * in your log parser / aggregator.
+   *
+   * @example
+   * logger.metric({ metric_name: 'http_request_duration', metric_value: 42, metric_unit: 'ms' });
+   * logger.metric({ metric_name: 'queue_depth', metric_value: 150, metric_unit: 'count', queue: 'orders' });
+   */
+  metric(fields: MetricFields): void {
+    const { metric_name, ...rest } = fields;
+    this._log('info', { metric_type: 'metric', metric_name, ...rest }, `metric: ${metric_name}`);
+  }
+
+  // ── sampling ─────────────────────────────────────────────────────────────
+
+  /**
+   * Flushes any remaining sample counters as summary log lines.
+   * Called automatically by fatal() and shutdown().
+   * Call manually if you need to ensure all counts are emitted.
+   */
+  flushSampleCounts(): void {
+    if (!this._sample) return;
+    for (const [level, state] of this._sampleState.entries()) {
+      if (state.since_last_emit > 0) {
+        const prefix = LEVEL_PREFIXES[level] ?? `[${level.toUpperCase()}] `;
+        const logFn: PinoLogFn = (this._pino[level as keyof PinoInstance] as PinoLogFn).bind(this._pino);
+        logFn(
+          { sampled_count: state.since_last_emit, sampled_total: state.total },
+          prefix + 'sampled log flush',
+        );
+        state.since_last_emit = 0;
+      }
+    }
+  }
+
+  // ── shutdown ─────────────────────────────────────────────────────────────
+
+  /**
+   * Gracefully shuts down the logger:
+   * 1. Flushes any remaining sample counters
+   * 2. Flushes the Pino write buffer (important for async transports)
+   *
+   * Call this on SIGTERM / SIGINT before process exit.
+   *
+   * @example
+   * process.on('SIGTERM', async () => {
+   *   logger.info('shutting down');
+   *   await logger.shutdown();
+   *   process.exit(0);
+   * });
+   */
+  async shutdown(): Promise<void> {
+    this.flushSampleCounts();
+    return new Promise<void>((resolve, reject) => {
+      if (typeof this._pino.flush === 'function') {
+        this._pino.flush((err?: Error) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
   }
 
   // ── isLevelEnabled ───────────────────────────────────────────────────────
 
-  /**
-   * Returns true if the given level would be written to stdout.
-   * Use to guard expensive object construction.
-   *
-   * @example
-   * if (logger.isLevelEnabled('debug')) {
-   *   logger.debug({ payload: buildExpensivePayload() }, 'full payload');
-   * }
-   */
   isLevelEnabled(level: LogLevel): boolean {
     return this._pino.isLevelEnabled(level);
   }
@@ -218,11 +335,8 @@ export class PinoLogger {
   /**
    * Exposes the raw Pino Logger instance.
    * Use for integrations that require it directly (e.g. pino-http).
-   *
-   * @example
-   * app.use(pinoHttp({ logger: logger.instance }));
    */
-  get instance(): Logger {
+  get instance(): PinoInstance {
     return this._pino;
   }
 }
@@ -233,23 +347,24 @@ export class PinoLogger {
  * Creates a configured PinoLogger instance.
  *
  * Reads from environment:
- *   LOG_LEVEL   — trace|debug|info|warn|error|fatal  (default: info)
- *   LOG_VERBOSE — true|false  forces trace level     (default: false)
- *   NODE_ENV    — development enables pino-pretty    (default: production)
- *
- * All logs are written as JSON to stdout.
- * In NODE_ENV=development, output is pretty-printed via pino-pretty.
+ *   LOG_LEVEL   — trace|debug|info|warn|error|fatal|alert  (default: info)
+ *   LOG_VERBOSE — true|false  forces trace level            (default: false)
+ *   NODE_ENV    — development enables pino-pretty           (default: production)
  *
  * @example
  * const logger = createLogger({
  *   service: 'windy-gateway',
  *   version: process.env.npm_package_version,
  *   env: process.env.NODE_ENV,
+ *   sample: { trace: 100, debug: 10 }, // emit every 100th trace, every 10th debug
  * });
  */
-export function createLogger(fields: BaseLogFields): PinoLogger {
+export function createLogger(fields: CreateLoggerOptions): PinoLogger {
   const pinoInstance = pino({
     level: resolveLogLevel(),
+
+    // Register custom "alert" level above fatal (70 > 60)
+    customLevels: { [ALERT_LEVEL_NAME]: ALERT_LEVEL_NUM },
 
     // Merged into every log line
     base: {
@@ -300,5 +415,5 @@ export function createLogger(fields: BaseLogFields): PinoLogger {
     transport: buildTransport(),
   });
 
-  return new PinoLogger(pinoInstance);
+  return new PinoLogger(pinoInstance, fields.sample);
 }

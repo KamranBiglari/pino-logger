@@ -1,4 +1,4 @@
-export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'alert'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 /**
@@ -12,6 +12,19 @@ export interface BaseLogFields {
   version?: string;
   /** Runtime environment — recommended: process.env.NODE_ENV */
   env?: string;
+}
+
+/**
+ * Options for createLogger — extends BaseLogFields with sampling config.
+ */
+export interface CreateLoggerOptions extends BaseLogFields {
+  /**
+   * Sample rates per level. e.g. { trace: 100 } emits every 100th trace log.
+   * Skipped logs are counted — the emitted log includes `sampled_count` and
+   * `sampled_total` fields so no data is lost.
+   * Levels not listed here (and warn/error/fatal/alert) always emit every log.
+   */
+  sample?: Partial<Record<LogLevel, number>>;
 }
 
 /**
@@ -33,4 +46,28 @@ export interface ErrorContext {
   err: Error | unknown;
   req_id?: string;
   [key: string]: unknown;
+}
+
+/**
+ * Fields for structured metric logging.
+ */
+export interface MetricFields {
+  /** Metric identifier in snake_case. e.g. 'http_request_duration_ms' */
+  metric_name: string;
+  /** Numeric value of the metric */
+  metric_value: number;
+  /** Unit of measurement. e.g. 'ms', 'bytes', 'count' */
+  metric_unit?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Timer returned by startTimer().
+ */
+export interface Timer {
+  /** Returns elapsed time in milliseconds */
+  elapsed(): number;
+  /** Logs at info level with duration_ms field */
+  done(msg: string): void;
+  done(obj: Record<string, unknown>, msg: string): void;
 }
