@@ -1,5 +1,5 @@
 {
-  "name": "@kavehmb/pino-logger",
+  "name": "@kamranbiglari/pino-logger",
   "version": "1.0.0",
   "description": "Opinionated Pino wrapper for structured logging across Node.js services",
   "main": "./dist/index.js",

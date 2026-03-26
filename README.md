@@ -1,23 +1,23 @@
-# @kavehmb/pino-logger
+# @kamranbiglari/pino-logger
 
 Opinionated Pino wrapper for structured JSON logging across Node.js/TypeScript services.
 
 ## Install
 
 ```bash
-npm install @kavehmb/pino-logger
+npm install @kamranbiglari/pino-logger
 npm install -D pino-pretty  # dev only
 ```
 
 Add to `.npmrc` in your repo:
 ```
-@kavehmb:registry=https://npm.pkg.github.com
+@kamranbiglari:registry=https://npm.pkg.github.com
 ```
 
 ## Usage
 
 ```typescript
-import { createLogger } from '@kavehmb/pino-logger';
+import { createLogger } from '@kamranbiglari/pino-logger';
 
 const logger = createLogger({ service: 'my-service' });
 
