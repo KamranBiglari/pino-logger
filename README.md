@@ -9,7 +9,9 @@ npm install @kamranbiglari/pino-logger
 npm install -D pino-pretty  # dev only
 ```
 
-Add to `.npmrc` in your repo:
+The package is published to both **npm** and **GitHub Packages**.
+To install from GitHub Packages instead, add `.npmrc` to your repo root:
+
 ```
 @kamranbiglari:registry=https://npm.pkg.github.com
 ```
