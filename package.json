@@ -12,10 +12,14 @@
       "require": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "rimraf dist && tsup",
     "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
@@ -26,7 +30,12 @@
     "type": "git",
     "url": "https://github.com/KamranBiglari/pino-logger.git"
   },
-  "keywords": ["logger", "pino", "structured-logging", "typescript"],
+  "keywords": [
+    "logger",
+    "pino",
+    "structured-logging",
+    "typescript"
+  ],
   "license": "UNLICENSED",
   "dependencies": {
     "pino": "^9.0.0"
@@ -36,7 +45,8 @@
     "pino-pretty": "^11.0.0",
     "rimraf": "^5.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.2"
   },
   "peerDependencies": {
     "pino-pretty": "^11.0.0"
