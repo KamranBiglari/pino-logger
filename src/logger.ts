@@ -1,6 +1,12 @@
 import pino, { Logger, LoggerOptions } from 'pino';
-import { BaseLogFields, LogLevel } from './types.js';
+import { BaseLogFields, LOG_LEVELS, LogLevel } from './types.js';
 import { resolveLogLevel } from './resolve-level.js';
+
+// Pre-allocate level label objects to avoid creating a new object on every log call.
+// This eliminates per-call GC pressure from the formatters.level function.
+const LEVEL_OBJECTS: Record<string, { level: string }> = Object.fromEntries(
+  LOG_LEVELS.map((l) => [l, { level: l }]),
+);
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
@@ -256,9 +262,10 @@ export function createLogger(fields: BaseLogFields): PinoLogger {
     timestamp: pino.stdTimeFunctions.isoTime,
 
     // Use string level labels (info/warn/error) not numeric codes (30/40/50)
+    // Uses pre-allocated objects to avoid per-call allocation + GC pressure.
     formatters: {
       level(label) {
-        return { level: label };
+        return LEVEL_OBJECTS[label] ?? { level: label };
       },
     },
 
@@ -269,6 +276,9 @@ export function createLogger(fields: BaseLogFields): PinoLogger {
     },
 
     // Redact sensitive fields before they reach stdout
+    // NOTE: Avoid wildcard paths (*.field) — they force Pino to walk
+    // the entire object tree on every log call, which is expensive.
+    // Use explicit paths for predictable O(1) redaction.
     redact: {
       paths: [
         'req.headers.authorization',
@@ -277,10 +287,12 @@ export function createLogger(fields: BaseLogFields): PinoLogger {
         'body.api_key',
         'body.token',
         'body.secret',
-        '*.password',
-        '*.apiKey',
-        '*.api_key',
-        '*.secret',
+        'headers.authorization',
+        'headers.cookie',
+        'password',
+        'apiKey',
+        'api_key',
+        'secret',
       ],
       censor: '[REDACTED]',
     },
