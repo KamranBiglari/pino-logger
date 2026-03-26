@@ -10,17 +10,18 @@ This repository uses `@kamranbiglari/pino-logger` for all logging. It is an opin
 
 ## Setup
 
-### .npmrc (required in repo root)
-
-```
-@kamranbiglari:registry=https://npm.pkg.github.com
-```
-
 ### Install
 
 ```bash
 npm install @kamranbiglari/pino-logger
 npm install -D pino-pretty  # dev only — pretty output locally
+```
+
+The package is published to both **npm** and **GitHub Packages**.
+If you prefer to install from GitHub Packages, add `.npmrc` to your repo root:
+
+```
+@kamranbiglari:registry=https://npm.pkg.github.com
 ```
 
 ### ESLint (recommended)
