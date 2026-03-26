@@ -142,20 +142,29 @@ process.on('SIGTERM', async () => {
 | Durations | suffix `_ms` | `latency_ms`, `ttl_ms` |
 | Message | short stable string | `'rate fetch failed'` |
 
-## Publishing
+## Versioning & Publishing
 
-```bash
-npm version patch   # or minor / major
-git push origin main --tags
-```
+Versions are managed automatically by [semantic-release](https://github.com/semantic-release/semantic-release).
+Push to `main` and the version is determined from commit messages:
 
-GitHub Actions runs: **typecheck** → **test** → **build** → **publish to npm + GitHub Packages** (in parallel).
+| Commit prefix | Version bump | Example |
+|---|---|---|
+| `fix:` `perf:` `refactor:` | Patch (`1.0.0` → `1.0.1`) | `fix: handle null error` |
+| `feat:` | Minor (`1.0.0` → `1.1.0`) | `feat: add metric() method` |
+| `feat!:` or `BREAKING CHANGE:` | Major (`1.0.0` → `2.0.0`) | `feat!: rename createLogger` |
+
+On each release, semantic-release:
+1. Analyzes commits since last release
+2. Bumps `package.json` version
+3. Generates `CHANGELOG.md`
+4. Creates a GitHub release with tag
+5. Publishes to **npm** and **GitHub Packages**
+
+No manual `npm version` or tag pushing needed.
 
 ### Required secrets
 
-| Secret | Registry | How to get |
+| Secret | Where | How to get |
 |---|---|---|
-| `GITHUB_TOKEN` | GitHub Packages | Auto-provided by GitHub Actions |
-| `NPM_TOKEN` | npm | npmjs.com → Access Tokens → Classic Token (Automation) |
-
-Add `NPM_TOKEN` in repo Settings → Secrets and variables → Actions.
+| `GITHUB_TOKEN` | Auto-provided | Nothing to set up |
+| `NPM_TOKEN` | Repo Settings → Secrets | npmjs.com → Access Tokens → Classic Token (Automation) |
