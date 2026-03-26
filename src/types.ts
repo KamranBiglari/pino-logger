@@ -15,7 +15,12 @@ export interface BaseLogFields {
 }
 
 /**
- * Options for createLogger — extends BaseLogFields with sampling config.
+ * Base field keys that can be excluded from log output.
+ */
+export type BaseFieldKey = 'service' | 'env' | 'version';
+
+/**
+ * Options for createLogger — extends BaseLogFields with sampling and exclusion config.
  */
 export interface CreateLoggerOptions extends BaseLogFields {
   /**
@@ -25,6 +30,17 @@ export interface CreateLoggerOptions extends BaseLogFields {
    * Levels not listed here (and warn/error/fatal/alert) always emit every log.
    */
   sample?: Partial<Record<LogLevel, number>>;
+
+  /**
+   * Base fields to exclude from every log line.
+   * By default all base fields (service, env, version) are included.
+   * Pass field names to remove them from output.
+   *
+   * @example
+   * // Only include service, exclude env and version:
+   * createLogger({ service: 'my-api', exclude: ['env', 'version'] });
+   */
+  exclude?: BaseFieldKey[];
 }
 
 /**

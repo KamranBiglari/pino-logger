@@ -1,5 +1,5 @@
 import pino, { LoggerOptions, LogFn } from 'pino';
-import { CreateLoggerOptions, LOG_LEVELS, LogLevel, MetricFields, Timer } from './types.js';
+import { BaseFieldKey, CreateLoggerOptions, LOG_LEVELS, LogLevel, MetricFields, Timer } from './types.js';
 import { resolveLogLevel } from './resolve-level.js';
 import { getContext } from './context.js';
 
@@ -360,18 +360,21 @@ export class PinoLogger {
  * });
  */
 export function createLogger(fields: CreateLoggerOptions): PinoLogger {
+  // Build base fields, then remove any that are excluded
+  const excluded = new Set<BaseFieldKey>(fields.exclude);
+  const base: Record<string, string> = {};
+  if (!excluded.has('service')) base.service = fields.service;
+  if (!excluded.has('env')) base.env = fields.env ?? process.env.NODE_ENV ?? 'production';
+  if (!excluded.has('version')) base.version = fields.version ?? process.env.npm_package_version ?? 'unknown';
+
   const pinoInstance = pino({
     level: resolveLogLevel(),
 
     // Register custom "alert" level above fatal (70 > 60)
     customLevels: { [ALERT_LEVEL_NAME]: ALERT_LEVEL_NUM },
 
-    // Merged into every log line
-    base: {
-      service: fields.service,
-      env: fields.env ?? process.env.NODE_ENV ?? 'production',
-      version: fields.version ?? process.env.npm_package_version ?? 'unknown',
-    },
+    // Merged into every log line (respects exclude list)
+    base,
 
     // ISO timestamp on every line
     timestamp: pino.stdTimeFunctions.isoTime,
