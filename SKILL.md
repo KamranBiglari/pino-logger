@@ -53,6 +53,17 @@ export const logger = createLogger({
 
 Then import `logger` from this file everywhere else. Do NOT create multiple logger instances.
 
+### Excluding base fields
+
+By default every log line includes `service`, `env`, and `version`. Use `exclude` to remove any of them:
+
+```typescript
+export const logger = createLogger({
+  service: 'my-service',
+  exclude: ['env', 'version'],  // only service remains in base output
+});
+```
+
 ---
 
 ## Environment Variables

@@ -33,6 +33,17 @@ logger.fatal({ err }, 'cannot continue'); // logs then exits with code 1
 All messages are prefixed with the log level: `[INFO] user logged in`, `[ERROR] request failed`, etc.
 This enables log parser engines to alert on specific levels via message pattern matching.
 
+## Excluding Base Fields
+
+By default every log line includes `service`, `env`, and `version`. Exclude any of them:
+
+```typescript
+const logger = createLogger({
+  service: 'my-service',
+  exclude: ['env', 'version'],  // only service remains in output
+});
+```
+
 ## Log Levels
 
 | Level | Numeric | Description |

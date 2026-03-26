@@ -4,6 +4,7 @@ export { withContext, getContext } from './context.js';
 export { LOG_LEVELS } from './types.js';
 export type {
   LogLevel,
+  BaseFieldKey,
   BaseLogFields,
   CreateLoggerOptions,
   RequestContext,
